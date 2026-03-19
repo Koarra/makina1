@@ -68,21 +68,24 @@ def run_section_purpose_of_business_relationship(
         )
         logger.info("check 3.1 succeeded")
 
-    # Check 3.2: OU code mapping
-    if (
-        "**OU code mapping**"
-        not in kyc_checks_output["purpose_of_business_relationships"]["reason"]
-    ):
-        logger.info("check 3.2 started")
-        if not ou_code_mapped:
-            kyc_checks_output["purpose_of_business_relationships"][
-                "reason"
-            ] += f"\n**OU code mapping**: is NULL or empty or mapping did not work: {ou_code_mapped}\n"
-        else:
-            kyc_checks_output["purpose_of_business_relationships"][
-                "reason"
-            ] += f"\n**OU code mapping found**: {ou_code_mapped}\n"
-        logger.info("check 3.2 succeeded")
+    # Check 3.2: OU code mapping (EDD only — skipped in KYC-only scenario)
+    if ou_code_mapped is None:
+        logger.info("check 3.2 skipped — no EDD case")
+    else:
+        if (
+            "**OU code mapping**"
+            not in kyc_checks_output["purpose_of_business_relationships"]["reason"]
+        ):
+            logger.info("check 3.2 started")
+            if not ou_code_mapped:
+                kyc_checks_output["purpose_of_business_relationships"][
+                    "reason"
+                ] += f"\n**OU code mapping**: is NULL or empty or mapping did not work: {ou_code_mapped}\n"
+            else:
+                kyc_checks_output["purpose_of_business_relationships"][
+                    "reason"
+                ] += f"\n**OU code mapping found**: {ou_code_mapped}\n"
+            logger.info("check 3.2 succeeded")
 
     # Check 3.3: Transaction summary
     logger.info("check 3.3 started")
@@ -101,7 +104,7 @@ def run_section_scap_flag_checks(
     partner_info,
     partner_name: str,
     kyc_checks_output: dict,
-    old_parsed: dict,
+    edd_parsed: dict,
 ) -> None:
     logger.info("========== START SECTION 13: SCAP flag checks ==========")
 
@@ -197,7 +200,7 @@ def run_section_scap_flag_checks(
         ] += f"\nActivity: {activity_countries}\n"
 
     # Check if SCAP flags are reported in EOD and flag discrepancies
-    if old_parsed is None:
+    if edd_parsed is None:
         kyc_checks_output["scap_flags"]["status"] = False
         kyc_checks_output["scap_flags"]["reason"] += (
             "\n**Check could not be fully run — EDD information is missing.**\n"
@@ -228,3 +231,100 @@ def run_section_scap_flag_checks(
         kyc_checks_output["scap_flags"]["reason"] += "No SCAP flags detected.\n"
 
     logger.info("========== END SECTION 13: SCAP flag checks ==========")
+
+
+
+# ============================================
+# Section 11.1: PEP/ASM Check
+# ============================================
+
+def run_section_pep_asm_consistency(
+    edd_parsed: dict, kyc_checks_output: dict, pep_sensitivity_present: bool
+):
+    if edd_parsed is None:
+        logger.info("Section 11.1 skipped — no EDD case")
+        return
+
+    if len(kyc_checks_output["consistency_checks_pep_asm"]["reason"].strip()) > 0:
+        return
+
+    logger.info(
+        "========== START SECTION 11.1: Consistency checks within the KYC: role holders and ASM numbers =========="
+    )
+
+    # Role Holders sufficiency check
+    quality_check_role_holders = "N/A (no DomCo, OpCo, trust, or foundation)."
+
+    # DomCo
+    if "Domiciliary Company" in edd_parsed["type_of_business_relationship"]["type"]:
+        if (
+            edd_parsed["poa_list"] is not None
+            and len(edd_parsed["role_holders_information"]) > 1
+        ):
+            quality_check_role_holders = "contains at least one BO and one PoA."
+        else:
+            quality_check_role_holders = (
+                " missing information about at least one BO and one PoA."
+            )
+            kyc_checks_output["consistency_checks_pep_asm"]["status"] = False
+
+    # Trust
+    if "Trust" in edd_parsed["type_of_business_relationship"]["type"]:
+        if edd_parsed["poa_list"] is not None and (
+            role in edd_parsed["type_of_business_relationship"]
+            for role in ["trustee", "settlor", "beneficiary"]
+        ):
+            quality_check_role_holders = (
+                "contains at least one trustee, settlor, beneficiary and one PoA."
+            )
+        else:
+            quality_check_role_holders = " missing information about at least one trustee, settlor, beneficiary and one PoA."
+            kyc_checks_output["consistency_checks_pep_asm"]["status"] = False
+
+    # Foundation
+    if "Foundation" in edd_parsed["type_of_business_relationship"]["type"]:
+        if edd_parsed["poa_list"] is not None and (
+            role in edd_parsed["type_of_business_relationship"]
+            for role in ["founder", "beneficiary"]
+        ):
+            quality_check_role_holders = (
+                "contains at least one founder, beneficiary and one PoA."
+            )
+        else:
+            quality_check_role_holders = " missing information about at least one founder, beneficiary and one PoA."
+            kyc_checks_output["consistency_checks_pep_asm"]["status"] = False
+
+    # OpCo
+    if "Operating Company" in edd_parsed["type_of_business_relationship"]["type"]:
+        if edd_parsed["poa_list"] is not None and (
+            "controlling person" in edd_parsed["type_of_business_relationship"]
+        ):
+            quality_check_role_holders = (
+                "contains at least one controlling person and one PoA."
+            )
+        else:
+            quality_check_role_holders = " missing information about at least one controlling person and one PoA."
+            kyc_checks_output["consistency_checks_pep_asm"]["status"] = False
+
+    # PEP Quality Check
+    quality_check_pep = "N/A (no PEP mention, no sensitivity documents attached)."
+    if "PEP" in edd_parsed["risk_category"] or pep_sensitivity_present:
+        if "ASM" in edd_parsed["risk_category"]:
+            quality_check_pep = "PEP ASM number documented."
+        else:
+            quality_check_pep = "PEP ASM number not documented."
+
+    kyc_checks_output["consistency_checks_pep_asm"][
+        "reason"
+    ] += f"\n**Role holders sufficiency check**: {quality_check_role_holders}"
+    kyc_checks_output["consistency_checks_pep_asm"][
+        "reason"
+    ] += f"\n\n**ASM Number presence check**: {quality_check_pep}"
+
+
+# ============================================
+# Section 11.2: Consistency Checks within the KYC: contradictory information check 1 vs rest
+# ============================================
+
+def run_section_consistency_checks_within_kyc(
+    partner_info  # ... (cut off in image)
