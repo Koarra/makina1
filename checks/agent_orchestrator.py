@@ -29,14 +29,6 @@ class AgentOrchestrator:
         logger.info("Initializing EDD Analysis")
         logger.info("=" * 60)
 
-        # --- Locate DD text file ---
-        try:
-            self.edd_case_path = glob(edd_case_path + "/DD-*.txt")[0]
-            logger.info(f"EDD case path: {self.edd_case_path}")
-        except IndexError:
-            logger.error(f"No DD-*.txt file found in {edd_case_path}")
-            raise FileNotFoundError(f"No DD-*.txt file found in {edd_case_path}")
-
         self.case_number = edd_case_path.split("/")[-1]
         logger.info(f"Case number: {self.case_number}")
 
@@ -50,10 +42,19 @@ class AgentOrchestrator:
         else:
             logger.info(f"Found {len(self.partner_folders)} partner folders")
 
-        # --- Parse EDD text ---
-        with open(self.edd_case_path, "r", encoding="ISO-8859-1") as f:
-            self.edd_raw_text = f.read()
-            self.edd_case = EddTextParser(self.edd_raw_text).edd_profiles_text
+        # --- Parse EDD text (optional) ---
+        dd_files = glob(edd_case_path + "/DD-*.txt")
+        if dd_files:
+            self.edd_case_path = dd_files[0]
+            logger.info(f"EDD case path: {self.edd_case_path}")
+            with open(self.edd_case_path, "r", encoding="ISO-8859-1") as f:
+                self.edd_raw_text = f.read()
+                self.edd_case = EddTextParser(self.edd_raw_text).edd_profiles_text
+        else:
+            logger.warning(f"No DD-*.txt file found in {edd_case_path} — EDD analysis will be skipped")
+            self.edd_case_path = None
+            self.edd_raw_text = None
+            self.edd_case = None
 
         # --- Process KYC PDFs ---
         self.kyc_cases = [
@@ -82,164 +83,172 @@ class AgentOrchestrator:
         """Run the EDD assessment and KYC quality checks."""
 
         # --- EDD analysis ---
-        save_json(
-            self.edd_case, OUTPUT_FOLDER, self.case_number, "edd_text_parser.json"
-        )
-        logger.info("Intermediate data saved for edd_txt_parser")
-
-        role_holders_to_process: List[Dict] = []
         cp_is_not_bo = False
-        if all(
-            x["bo_nbr"] != self.edd_case["contractual_partner_information"]["cp_nbr"]
-            for x in self.edd_case["role_holders_information"]
-        ):
-            cp_is_not_bo = True
-            role_holders_to_process.append(
-                self.edd_case["contractual_partner_information"]
+        if self.edd_case:
+            save_json(
+                self.edd_case, OUTPUT_FOLDER, self.case_number, "edd_text_parser.json"
             )
+            logger.info("Intermediate data saved for edd_txt_parser")
 
-        role_holders_to_process.extend(self.edd_case["role_holders_information"])
-
-        logger.info("Starting EddAssessmentOutput")
-        initial_edd_state = {
-            "file_path": self.edd_case_path,
-            "raw_text": self.edd_raw_text,
-            "dict_parsed_text": self.edd_case,
-            "role_holders_to_process": role_holders_to_process,
-        }
-        edd_agent = EddAssessmentAgentOutput().agent
-        self.edd_result = edd_agent.invoke(initial_edd_state)
-
-        save_json(
-            self.edd_result,
-            OUTPUT_FOLDER,
-            self.case_number,
-            "edd_assessment_agent_output.json",
-        )
-        logger.info("Intermediate data saved for edd result")
-
-        # --- KYC analysis ---
-        logger.info("Starting KYC checks output processing")
-
-        # Extract partner names from EDD case
-        cp_nbr = self.edd_case["contractual_partner_information"]["cp_nbr"]
-
-        edd_partner_names = [
-            partner["name"] for partner in self.edd_case["role_holders_information"]
-        ]
-
-        if cp_is_not_bo:
-            edd_partner_names.insert(
-                0, self.edd_case["contractual_partner_information"]["name"]
-            )
-
-        edd_name = self.edd_case["contractual_partner_information"]["name"]
-        ou_code_mapped = resolve_ou_mapping(
-            self.edd_case, ou_code_data_path=OU_CODE_DATA_PATH
-        )
-
-        # Fuzzy match KYC partners to EDD partners
-        self.partner_mappings = match_and_save_partners(
-            self.kyc_cases,
-            edd_partner_names,
-            threshold=0.8,
-            output_path=os.path.join(
-                OUTPUT_FOLDER, self.case_number, "partner_name_mapping.json"
-            ),
-            verbose=True,
-        )
-
-        # Filter out KYC cases with empty datasets
-        client_histories_parsed = [
-            item for item in self.kyc_cases if item.kyc_dataset is not None
-        ]
-        logger.info(f"Valid KYC histories: {len(client_histories_parsed)}")
-
-        # Initialise shared output structure
-        kyc_checks_output = self._init_kyc_checks_output()
-
-        # Build the KYC LangGraph agent (once, shared across all partners)
-        kyc_agent = KycAgentOutput().agent
-
-        # Run KYC checks for each EDD partner
-        self.kyc_results = {}
-        logger.info(f"edd_name: {edd_name}")
-        for partner_name_edd in edd_partner_names:
-            logger.info(f"Running KYC checks for partner: {partner_name_edd}")
-
-            # Find the matching KYC partner_info
-            kyc_folder = next(
-                (
-                    r["kyc_partner_name"]
-                    for r in self.partner_mappings["mappings"]
-                    if r["matched_edd_name"] == partner_name_edd
-                ),
-                None,
-            )
-
-            partner_info = next(
-                (
-                    info
-                    for info in client_histories_parsed
-                    if info.partner_name == kyc_folder
-                ),
-                None,
-            )
-
-            if not kyc_folder or not partner_info:
-                logger.warning(
-                    f"Could not resolve partner info for: {partner_name_edd}"
+            role_holders_to_process: List[Dict] = []
+            if all(
+                x["bo_nbr"] != self.edd_case["contractual_partner_information"]["cp_nbr"]
+                for x in self.edd_case["role_holders_information"]
+            ):
+                cp_is_not_bo = True
+                role_holders_to_process.append(
+                    self.edd_case["contractual_partner_information"]
                 )
-                continue
 
-            folder_name = os.path.join(
-                self.case_number,
-                os.path.basename(partner_info.kyc_folder_path),
-            )
+            role_holders_to_process.extend(self.edd_case["role_holders_information"])
 
-            # Serialise KYC dataset to disk
-            serialise_kyc_dataset(partner_info, OUTPUT_FOLDER, folder_name)
-
-            # Build initial KYC state
-            initial_kyc_state = {
-                "partner_name": partner_info.partner_name,
-                "folder_name": folder_name,
-                "ou_code_mapped": ou_code_mapped,
-                "output_folder": OUTPUT_FOLDER,
-                "partner_info": partner_info,
-                "kyc_checks_output": kyc_checks_output,
-                "edd_parsed": self.edd_case,  # patch for KYC QC 11.1
-                "pep_sensitivity_present": self.pep_documents_present,  # patch for KYC QC 11.1
+            logger.info("Starting EddAssessmentOutput")
+            initial_edd_state = {
+                "file_path": self.edd_case_path,
+                "raw_text": self.edd_raw_text,
+                "dict_parsed_text": self.edd_case,
+                "role_holders_to_process": role_holders_to_process,
             }
-
-            # Run the LangGraph KYC pipeline
-            final_kyc_state = kyc_agent.invoke(initial_kyc_state)
-            import copy
-            # self.kyc_results[partner_name_edd] = final_kyc_state["kyc_checks_output"]
-            self.kyc_results[partner_name_edd] = copy.deepcopy(
-                final_kyc_state["kyc_checks_output"]
-            )
-
-            # Attach raw contradiction checks data
-            contradiction_path = os.path.join(
-                OUTPUT_FOLDER,
-                folder_name,
-                "section11_2_kyc_data_check_kyc_contradiction.json",
-            )
-
-            if os.path.exists(contradiction_path):
-                with open(contradiction_path) as f:
-                    self.kyc_results[partner_name_edd][
-                        "consistency_checks_within_kyc_contradiction_checks"
-                    ]["raw_checks"] = json.load(f)
+            edd_agent = EddAssessmentAgentOutput().agent
+            self.edd_result = edd_agent.invoke(initial_edd_state)
 
             save_json(
-                self.kyc_results[partner_name_edd],
+                self.edd_result,
                 OUTPUT_FOLDER,
-                folder_name,
-                "kyc_checks_output.json",
+                self.case_number,
+                "edd_assessment_agent_output.json",
             )
-            logger.info(f"KYC checks completed for: {partner_name_edd}")
+            logger.info("Intermediate data saved for edd result")
+        else:
+            logger.info("No EDD case — skipping EDD analysis")
+            self.edd_result = {}
+
+        # --- KYC analysis ---
+        if not self.kyc_cases:
+            logger.info("No KYC partner folders found — skipping KYC analysis")
+            self.kyc_results = {}
+            self.partner_mappings = None
+        else:
+            logger.info("Starting KYC checks output processing")
+
+            # Extract partner names — from EDD if available, else from KYC folders
+            if self.edd_case:
+                edd_partner_names = [
+                    partner["name"] for partner in self.edd_case["role_holders_information"]
+                ]
+                if cp_is_not_bo:
+                    edd_partner_names.insert(
+                        0, self.edd_case["contractual_partner_information"]["name"]
+                    )
+                ou_code_mapped = resolve_ou_mapping(
+                    self.edd_case, ou_code_data_path=OU_CODE_DATA_PATH
+                )
+            else:
+                logger.info("No EDD case — deriving partner names from KYC folders")
+                edd_partner_names = [case.partner_name for case in self.kyc_cases]
+                ou_code_mapped = None
+
+            # Fuzzy match KYC partners to EDD partners
+            self.partner_mappings = match_and_save_partners(
+                self.kyc_cases,
+                edd_partner_names,
+                threshold=0.8,
+                output_path=os.path.join(
+                    OUTPUT_FOLDER, self.case_number, "partner_name_mapping.json"
+                ),
+                verbose=True,
+            )
+
+            # Filter out KYC cases with empty datasets
+            client_histories_parsed = [
+                item for item in self.kyc_cases if item.kyc_dataset is not None
+            ]
+            logger.info(f"Valid KYC histories: {len(client_histories_parsed)}")
+
+            # Initialise shared output structure
+            kyc_checks_output = self._init_kyc_checks_output()
+
+            # Build the KYC LangGraph agent (once, shared across all partners)
+            kyc_agent = KycAgentOutput().agent
+
+            # Run KYC checks for each EDD partner
+            self.kyc_results = {}
+            for partner_name_edd in edd_partner_names:
+                logger.info(f"Running KYC checks for partner: {partner_name_edd}")
+
+                # Find the matching KYC partner_info
+                kyc_folder = next(
+                    (
+                        r["kyc_partner_name"]
+                        for r in self.partner_mappings["mappings"]
+                        if r["matched_edd_name"] == partner_name_edd
+                    ),
+                    None,
+                )
+
+                partner_info = next(
+                    (
+                        info
+                        for info in client_histories_parsed
+                        if info.partner_name == kyc_folder
+                    ),
+                    None,
+                )
+
+                if not kyc_folder or not partner_info:
+                    logger.warning(
+                        f"Could not resolve partner info for: {partner_name_edd}"
+                    )
+                    continue
+
+                folder_name = os.path.join(
+                    self.case_number,
+                    os.path.basename(partner_info.kyc_folder_path),
+                )
+
+                # Serialise KYC dataset to disk
+                serialise_kyc_dataset(partner_info, OUTPUT_FOLDER, folder_name)
+
+                # Build initial KYC state
+                initial_kyc_state = {
+                    "partner_name": partner_info.partner_name,
+                    "folder_name": folder_name,
+                    "ou_code_mapped": ou_code_mapped,
+                    "output_folder": OUTPUT_FOLDER,
+                    "partner_info": partner_info,
+                    "kyc_checks_output": kyc_checks_output,
+                    "edd_parsed": self.edd_case,  # patch for KYC QC 11.1
+                    "pep_sensitivity_present": self.pep_documents_present,  # patch for KYC QC 11.1
+                }
+
+                # Run the LangGraph KYC pipeline
+                final_kyc_state = kyc_agent.invoke(initial_kyc_state)
+                import copy
+                # self.kyc_results[partner_name_edd] = final_kyc_state["kyc_checks_output"]
+                self.kyc_results[partner_name_edd] = copy.deepcopy(
+                    final_kyc_state["kyc_checks_output"]
+                )
+
+                # Attach raw contradiction checks data
+                contradiction_path = os.path.join(
+                    OUTPUT_FOLDER,
+                    folder_name,
+                    "section11_2_kyc_data_check_kyc_contradiction.json",
+                )
+
+                if os.path.exists(contradiction_path):
+                    with open(contradiction_path) as f:
+                        self.kyc_results[partner_name_edd][
+                            "consistency_checks_within_kyc_contradiction_checks"
+                        ]["raw_checks"] = json.load(f)
+
+                save_json(
+                    self.kyc_results[partner_name_edd],
+                    OUTPUT_FOLDER,
+                    folder_name,
+                    "kyc_checks_output.json",
+                )
+                logger.info(f"KYC checks completed for: {partner_name_edd}")
 
         logger.info("run analysis completed successfully")
 

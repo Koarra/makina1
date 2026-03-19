@@ -339,8 +339,8 @@ class OutputWriter:
         edd_profile_output: dict,
         kyc_profiles_output: dict,
         case_number: str,
-        partner_mappings: dict,
-        edd_case: dict,
+        partner_mappings: dict | None,
+        edd_case: dict | None,
     ):
         """Write the EDD assessment and KYC quality check results in a Word report."""
         doc = Document()
