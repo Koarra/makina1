@@ -284,6 +284,11 @@ def run_section_evaluate_total_assets(
         )
 
         logger.info(f"total_of_specific_asset_fields: {total_of_specific_asset_fields}")
+        logger.info(f"kyc_total_assets: {kyc_total_assets} (type: {type(kyc_total_assets)})")
+        logger.info(f"kyc_liquidity: {kyc_liquidity} (type: {type(kyc_liquidity)})")
+        logger.info(f"kyc_real_estate: {kyc_real_estate} (type: {type(kyc_real_estate)})")
+        logger.info(f"kyc_non_liquid: {kyc_non_liquid} (type: {type(kyc_non_liquid)})")
+        logger.info(f"amount_kyc_origin_of_assets: {amount_kyc_origin_of_assets} (type: {type(amount_kyc_origin_of_assets)})")
         if not kyc_total_assets or kyc_total_assets == 0:
             percentage_of_specific_asset_fields_explaining_total_assets = 0
             percentage_of_total_assets_with_known_origin = 0
@@ -320,12 +325,12 @@ def run_section_evaluate_total_assets(
         check["reason"] += (
             f"The sum of **liquid** ({(kyc_liquidity or 0):.2f}), **real estate** ({(kyc_real_estate or 0):.2f}), "
             f"**non-liquid** ({(kyc_non_liquid or 0):.2f}) asset fields is {total_of_specific_asset_fields:.2f}, "
-            f"representing **{percentage_of_specific_asset_fields_explaining_total_assets:.2%}** of the total assets indicated in KYC ({kyc_total_assets:.2f}).\n\n"
+            f"representing **{percentage_of_specific_asset_fields_explaining_total_assets:.2%}** of the total assets indicated in KYC ({(kyc_total_assets or 0):.2f}).\n\n"
         )
         check["reason"] += (
-            f"The Origin of Assets section indicates a total assets amount of {amount_kyc_origin_of_assets:.2f}, "
+            f"The Origin of Assets section indicates a total assets amount of {(amount_kyc_origin_of_assets or 0):.2f}, "
             f"representing **{percentage_of_total_assets_with_known_origin:.2%}** of the total assets indicated in KYC "
-            f"({kyc_total_assets:.2f}).\n"
+            f"({(kyc_total_assets or 0):.2f}).\n"
         )
     else:
         logger.info("instance is a legal entity")
@@ -463,7 +468,7 @@ def run_section_remarks_on_total_asset_and_asset_composition(
             )
         percentage_validation = 0.8
 
-        check["reason"] += f"\n\n**{partner_name}** **7.1**: The amount mentioned in the remarks on total assets is {total_assets_remarks:.2f}, representing **{percentage_total_remarks_vs_total_assets:.2%}** of the total assets indicated in the KYC ({kyc_total_assets:.2f})."
+        check["reason"] += f"\n\n**{partner_name}** **7.1**: The amount mentioned in the remarks on total assets is {(total_assets_remarks or 0):.2f}, representing **{percentage_total_remarks_vs_total_assets:.2%}** of the total assets indicated in the KYC ({(kyc_total_assets or 0):.2f})."
         followup = f"The remarks on total assets {'do not ' if not remarks_sufficiency_checks else ''}fully explain or support the total assets section."
         check["reason"] += f"\n**7.2**: {followup}\n"
 
@@ -585,6 +590,7 @@ def run_section_family_situation(
 
         tmp = f"Extracted family members with potential links to SOW/PEP: {family_links if len(family_links.strip()) > 0 else 'none.'}"
         headline = None
+        check_ok = True
 
         if len(family_situation_collapsed) > 0:
             logger.info(
@@ -783,7 +789,7 @@ def run_section_consistency_checks_within_kyc(
         other_fields = {k: v for k, v in kyc_dict.items() if k != field_name}
         # TODO HERE
         contradiction_checks_prompt = CONTRADICTION_CHECKS_PROMPT.format(
-            text=field_value, dic_others=other_fields
+            text1=field_value, dic_others=other_fields
         )
 
         response_llm_contradiction_checks = run_compliance_check(

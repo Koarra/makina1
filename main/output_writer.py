@@ -12,8 +12,6 @@ from main.constants import DICT_KYC_CHECKS_NAME_DISPLAY, OUTPUT_FOLDER
 from main.utils.func_utils import prettify_name
 from main.utils.logger_config import setup_logger
 
-logger = setup_logger(__name__)
-
 
 class OutputWriter:
     """Class for formatting EDD assessment and KYC quality check results into a Word report."""

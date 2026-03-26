@@ -156,6 +156,12 @@ class AgentOrchestrator:
             edd_partner_names = [case.partner_name for case in self.kyc_cases]
             ou_code_mapped = None
 
+        # OpCo scenario: only process the contractual partner
+        if self.edd_case and "Operating Company" in self.edd_case["type_of_business_relationship"]["type"]:
+            cp_name = self.edd_case["contractual_partner_information"]["name"]
+            edd_partner_names = [name for name in edd_partner_names if name == cp_name]
+            logger.info(f"OpCo scenario: limiting KYC to contractual partner only ({cp_name})")
+
         # Fuzzy match KYC partners to EDD partners
         self.partner_mappings = match_and_save_partners(
             self.kyc_cases,
